@@ -269,7 +269,7 @@ if (!sdrf_file) {
        file sdrf from ch_sdrf
 
       output:
-       file "experimental_design.tsv" into ch_expdesign, ch_pro_quant_exp
+       file "experimental_design.tsv" into ch_expdesign, ch_pro_quant_exp, ch_expdesign_multiqc
        file "openms.tsv" into ch_sdrf_config_file
 
       when:
@@ -323,7 +323,7 @@ if (params.expdesign)
 {
     Channel
         .fromPath(params.expdesign)
-        .into { ch_pro_quant_exp; ch_expdesign }
+        .into { ch_pro_quant_exp; ch_expdesign; ch_expdesign_multiqc }
 }
 
 
@@ -412,11 +412,11 @@ process mzml_indexing {
 if (params.openms_peakpicking)
 {
   branched_input_mzMLs.inputIndexedMzML.mix(mzmls_converted).mix(mzmls_indexed).set{mzmls_pp}
-  (mzmls_isobaric_analyzer, mzmls_msgf, mzmls_comet, mzmls_luciphor) = [Channel.empty(), Channel.empty(), Channel.empty(), Channel.empty()]
+  (mzmls_isobaric_analyzer, mzmls_msgf, mzmls_comet, mzmls_luciphor, mzmls_multiqc) = [Channel.empty(), Channel.empty(), Channel.empty(), Channel.empty(), Channel.empty()]
 }
 else
 {
-  branched_input_mzMLs.inputIndexedMzML.mix(mzmls_converted).mix(mzmls_indexed).into{mzmls_isobaric_analyzer; mzmls_comet; mzmls_msgf; mzmls_luciphor}
+  branched_input_mzMLs.inputIndexedMzML.mix(mzmls_converted).mix(mzmls_indexed).into{mzmls_isobaric_analyzer; mzmls_comet; mzmls_msgf; mzmls_luciphor; mzmls_multiqc}
   mzmls_pp = Channel.empty()
 }
 
@@ -467,7 +467,7 @@ process openms_peakpicker {
       params.openms_peakpicking
 
     output:
-     tuple mzml_id, file("out/${mzml_file.baseName}.mzML") into isobaric_analyzer_picked, mzmls_msgf_picked, mzmls_comet_picked, mzmls_plfq_picked
+     tuple mzml_id, file("out/${mzml_file.baseName}.mzML") into isobaric_analyzer_picked, mzmls_msgf_picked, mzmls_comet_picked, mzmls_multiqc_picked
      file "*.log"
 
     script:
@@ -511,14 +511,14 @@ process isobaric_analyzer {
 
 	output:
 	  tuple mzml_id, file("${mzml_file.baseName}_iso.consensusXML") into id_files_consensusXML
-      file "*.log"
+	  file "*.log"
 
 	script:
 	  if (diss_meth == 'HCD') diss_meth = 'High-energy collision-induced dissociation'
 	  else if (diss_meth == 'CID') diss_meth = 'Collision-induced dissociation'
 	  else if (diss_meth == 'ETD') diss_meth = 'Electron transfer dissociation'
 	  else if (diss_meth == 'ECD') diss_meth = 'Electron capture dissociation'
-    iso_normalization = params.iso_normalization ? "-quantification:normalization" : ""
+	  iso_normalization = params.iso_normalization ? "-quantification:normalization" : ""
 
 	  """
 	  IsobaricAnalyzer -type ${label} \\
@@ -528,8 +528,8 @@ process isobaric_analyzer {
 	  				   -extraction:min_reporter_intensity ${params.min_reporter_intensity} \\
 	  				   -extraction:min_precursor_purity ${params.min_precursor_purity} \\
 	  				   -extraction:precursor_isotope_deviation ${params.precursor_isotope_deviation} \\
-               ${iso_normalization} \\
-               -${label}:reference_channel ${params.reference_channel} \\
+                       ${iso_normalization} \\
+                       -${label}:reference_channel ${params.reference_channel} \\
 	  				   -debug ${params.iso_debug} \\
 	  				   -out ${mzml_file.baseName}_iso.consensusXML \\
 	  				   > ${mzml_file.baseName}_isob.log
@@ -774,7 +774,7 @@ process percolator {
      tuple mzml_id, file(id_file) from id_files_idx_feat
 
     output:
-     tuple mzml_id, file("${id_file.baseName}_perc.idXML"), val("MS:1001491") into id_files_perc, id_files_perc_consID
+     tuple mzml_id, file("${id_file.baseName}_perc.idXML"), val("MS:1001491") into id_files_perc, id_files_perc_consID, id_files_perc_multiqc
      file "*.log"
 
     when:
@@ -855,7 +855,7 @@ process idpep {
      tuple mzml_id, file(id_file) from id_files_idx_ForIDPEP_FDR.mix(id_files_idx_ForIDPEP_noFDR)
 
     output:
-     tuple mzml_id, file("${id_file.baseName}_idpep.idXML"), val("q-value_score") into id_files_idpep, id_files_idpep_consID
+     tuple mzml_id, file("${id_file.baseName}_idpep.idXML"), val("q-value_score") into id_files_idpep, id_files_idpep_consID, id_files_idpep_multiqc
      file "*.log"
 
     when:
@@ -1155,8 +1155,8 @@ process epifany{
 	 		 -protein_fdr true \\
 	 		 -threads ${task.cpus} \\
 	 		 -debug 10 \\
-       		 -algorithm:keep_best_PSM_only false \\
-       		 -algorithm:update_PSM_probabilities false \\
+			 -algorithm:keep_best_PSM_only false \\
+			 -algorithm:update_PSM_probabilities false \\
 	 		 -greedy_group_resolution ${params.greedy_group_resolution} \\
 			 -algorithm:top_PSMs ${params.top_PSMs} \\
 			 -out ${consus_file.baseName}_epi.consensusXML \\
@@ -1181,12 +1181,12 @@ process epi_filter{
 	script:
 	"""
 	IDFilter -in ${consus_epi} \\
-           -out ${consus_epi.baseName}_filt.consensusXML \\
-           -threads ${task.cpus} \\
-		   -delete_unreferenced_peptide_hits \\
-           -score:prot ${params.protein_level_fdr_cutoff} \\
-		   -debug 10 \\
-           > ${consus_epi.baseName}_idfilter.log
+			 -out ${consus_epi.baseName}_filt.consensusXML \\
+			 -threads ${task.cpus} \\
+			 -delete_unreferenced_peptide_hits \\
+			 -score:prot ${params.protein_level_fdr_cutoff} \\
+			 -debug 10 \\
+			 > ${consus_epi.baseName}_idfilter.log
 	"""
 }
 
@@ -1233,31 +1233,31 @@ process pro_quant{
 	output:
 	 file "protein_out.csv" optional true into downstreams_tool_A
 	 file "peptide_out.csv" into downstreams_tool_B
-	 file "*.mzTab" optional true into out_mztab
+	 file "*.mzTab" into out_mztab, ch_out_mztab_multiqc
 	 file "*.log"
 
 	script:
-   mztab = params.mztab_export ? "-mztab out.mzTab" : ""
-   include_all = params.include_all ? "-include_all" : ""
-   fix_peptides = params.fix_peptides ? "-fix_peptides" : ""
-   normalize = params.normalize ? "-consensus:normalize" : ""
-   
-   """
-   ProteinQuantifier -in ${epi_filt_resolve} \\
-   				   	-design ${pro_quant_exp} \\
-   				   	-out protein_out.csv \\
-   				   	-peptide_out peptide_out.csv \\
-              ${mztab} \\
-   				   	-top ${params.top} \\
-   				   	-average ${params.average} \\
-              ${include_all} \\
-              ${fix_peptides} \\
-   				   	-best_charge_and_fraction \\
-   				   	-ratios \\
-   				   	-threads ${task.cpus} \\
-              ${normalize} \\
-   				   	-debug 100 \\
-   				   	> pro_quant.log
+	 mztab = params.mztab_export ? "-mztab out.mzTab" : ""
+	 include_all = params.include_all ? "-include_all" : ""
+	 fix_peptides = params.fix_peptides ? "-fix_peptides" : ""
+	 normalize = params.normalize ? "-consensus:normalize" : ""
+	
+	"""
+	ProteinQuantifier -in ${epi_filt_resolve} \\
+					  -design ${pro_quant_exp} \\
+					  -out protein_out.csv \\
+					  -peptide_out peptide_out.csv \\
+					  ${mztab} \\
+					  -top ${params.top} \\
+					  -average ${params.average} \\
+					  ${include_all} \\
+					  ${fix_peptides} \\
+					  -best_charge_and_fraction \\
+					  -ratios \\
+					  -threads ${task.cpus} \\
+					  ${normalize} \\
+					  -debug 100 \\
+					  > pro_quant.log
    """
 }
 
@@ -1310,7 +1310,7 @@ process ptxqc {
      file "*.Rmd"
      file "*.pdf"
      file "*.txt"
-	 file "*.log"
+     file "*.log"
 
     script:
      """
@@ -1318,6 +1318,47 @@ process ptxqc {
      """
 }
 
+
+mzmls_multiqc.mix(mzmls_multiqc_picked)
+  .multiMap{ it ->
+      mzmls: it[1]
+  }
+  .set{ch_ptmt1}
+
+id_files_perc_multiqc.mix(id_files_idpep_multiqc)
+  .multiMap{ it ->
+      ids: it[1]
+  }
+  .set{ch_ptmt2}
+
+process pmultiqc {
+
+    label 'process_low'
+    label 'process_single_thread'
+
+    publishDir "${params.outdir}/logs", mode: 'copy', pattern: '*.log'
+    publishDir "${params.outdir}/multiqc", mode: 'copy'
+
+    input:
+     file design from ch_expdesign_multiqc
+     file 'mzMLs/*' from ch_ptmt1.mzmls.collect()
+     file 'proteomicslfq/*' from ch_out_mztab_multiqc
+     file 'raw_ids/*' from ch_ptmt2.ids.collect()
+
+    output:
+     file '*.html' into ch_multiqc_report
+     file '*.db'
+
+    script:
+     """
+     multiqc --exp_design ${design} \\
+             --mzMLs ./mzMLs \\
+             --quant_method tmt \\
+			 --raw_ids ./raw_ids \\
+             ./proteomicslfq \\
+             -o .
+     """
+}
 
 
 //--------------------------------------------------------------- //
